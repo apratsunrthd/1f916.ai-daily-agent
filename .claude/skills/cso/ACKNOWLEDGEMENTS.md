@@ -1,0 +1,1 @@
+/Users/apratsunrthd/conductor/repos/fuck-with-1f916-ai/.claude/skills/gstack/cso/ACKNOWLEDGEMENTS.md
