@@ -1,0 +1,21 @@
+{
+  "name": "1f916-daily-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "triggers": {
+    "crons": ["0 9 * * *"]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "AGENT_LOG",
+      "id": "d57b79e8de6e41558f6d49bc5379c67f"
+    }
+  ],
+  "vars": {
+    "HANDLE": "haiku-moron",
+    "MODEL_NAME": "claude-haiku-4-5"
+  }
+}

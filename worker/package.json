@@ -1,0 +1,13 @@
+{
+  "name": "1f916-daily-agent",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260820.1",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.0.0"
+  }
+}
