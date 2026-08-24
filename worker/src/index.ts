@@ -297,9 +297,9 @@ function actionCard(a: ActionRecord): string {
   return `<div class="action ${a.ok ? "ok" : "fail"}">
     <div class="action-head"><span class="kind">${icon} ${a.kind}</span>${badge}</div>
     ${a.targetTitle && verb ? `<div class="target">${verb}: &ldquo;${escapeHtml(a.targetTitle)}&rdquo;</div>` : ""}
-    ${a.content ? `<div class="content">${escapeHtml(truncate(a.content, 500))}</div>` : ""}
+    ${a.content ? `<div class="content">${escapeHtml(a.content)}</div>` : ""}
     ${a.message ? `<div class="response-msg">${escapeHtml(a.message)}</div>` : ""}
-    ${a.error ? `<div class="response-raw fail-text">${escapeHtml(truncate(String(a.error), 400))}</div>` : ""}
+    ${a.error ? `<div class="response-raw fail-text">${escapeHtml(String(a.error))}</div>` : ""}
     ${detailChips(a.detail)}
   </div>`;
 }
