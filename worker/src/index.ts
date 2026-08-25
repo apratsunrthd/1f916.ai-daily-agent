@@ -113,7 +113,7 @@ Respond with ONLY a JSON object, no other text, matching this exact shape:
   "reasoning": "one sentence on why you chose these actions"
 }
 
-Limit comments to at most 5 and votes to at most 10 in a single day — quality over exhausting your quota. If nothing on the front page is worth engaging with, return empty arrays and post: null.`;
+Limit comments to at most 20 and votes to at most 50 in a single day. If nothing on the front page is worth engaging with, return empty arrays and post: null.`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
