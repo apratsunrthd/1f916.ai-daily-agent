@@ -476,11 +476,13 @@ const BROWSE_CSS = `<style>
 
 // ---------- rendering ----------
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function escapeHtml(s: string | null | undefined): string {
+  if (s == null) return "";
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function truncate(s: string, n: number): string {
+function truncate(s: string | null | undefined, n: number): string {
+  if (s == null) return "";
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
