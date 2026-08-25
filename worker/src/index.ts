@@ -297,17 +297,27 @@ interface Comment {
 }
 
 async function fetchOfficial(): Promise<OfficialCitizen[]> {
-  const res = await fetch(`${BASE}/api/official`);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { citizens?: OfficialCitizen[] } | OfficialCitizen[];
-  return Array.isArray(data) ? data : (data.citizens ?? []);
+  try {
+    const res = await fetch(`${BASE}/api/official`);
+    if (!res.ok) return [];
+    const text = await res.text();
+    const data = JSON.parse(text) as { citizens?: OfficialCitizen[] } | OfficialCitizen[];
+    return Array.isArray(data) ? data : (data.citizens ?? []);
+  } catch {
+    return [];
+  }
 }
 
 async function fetchPost(id: string): Promise<{ post: PostDetail | null; comments: Comment[] }> {
-  const res = await fetch(`${BASE}/api/post/${id}`);
-  if (!res.ok) return { post: null, comments: [] };
-  const data = (await res.json()) as { post?: PostDetail; comments?: Comment[] };
-  return { post: data.post ?? null, comments: data.comments ?? [] };
+  try {
+    const res = await fetch(`${BASE}/api/post/${id}`);
+    if (!res.ok) return { post: null, comments: [] };
+    const text = await res.text();
+    const data = JSON.parse(text) as { post?: PostDetail; comments?: Comment[] };
+    return { post: data.post ?? null, comments: data.comments ?? [] };
+  } catch {
+    return { post: null, comments: [] };
+  }
 }
 
 function renderBrowse(posts: FrontPost[], officials: OfficialCitizen[], order: string): string {
@@ -667,16 +677,19 @@ export default {
     if (url.pathname === "/browse") {
       const order = url.searchParams.get("order") ?? "top";
       const [posts, officials] = await Promise.all([
-        fetchFrontPage([]).then((p) => p),
+        fetchFrontPage([]),
         fetchOfficial(),
       ]);
-      // re-fetch with requested order if not top
-      const feedPosts = order === "top" ? posts : await (async () => {
-        const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
-        if (!res.ok) return posts;
-        const data = (await res.json()) as { posts?: FrontPost[] };
-        return data.posts ?? posts;
-      })();
+      let feedPosts = posts;
+      if (order !== "top") {
+        try {
+          const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
+          if (res.ok) {
+            const data = JSON.parse(await res.text()) as { posts?: FrontPost[] };
+            feedPosts = data.posts ?? posts;
+          }
+        } catch { /* fall back to already-fetched posts */ }
+      }
       return new Response(renderBrowse(feedPosts, officials, order), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
@@ -691,11 +704,17 @@ export default {
     if (url.pathname === "/browse/citizen") {
       const handle = url.searchParams.get("handle") ?? "";
       if (!handle) return Response.redirect(new URL("/browse", request.url).toString(), 302);
-      const res = await fetch(`${BASE}/api/record/${encodeURIComponent(handle)}`);
-      if (!res.ok) return new Response(renderCitizenNotFound(handle), { headers: { "Content-Type": "text/html; charset=utf-8" } });
-      const data = (await res.json()) as { citizen?: OfficialCitizen; posts?: PostDetail[] };
-      const citizen = data.citizen;
-      const citizenPosts = data.posts ?? [];
+      let citizen: OfficialCitizen | undefined;
+      let citizenPosts: PostDetail[] = [];
+      try {
+        const res = await fetch(`${BASE}/api/record/${encodeURIComponent(handle)}`);
+        if (!res.ok) return new Response(renderCitizenNotFound(handle), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+        const data = JSON.parse(await res.text()) as { citizen?: OfficialCitizen; posts?: PostDetail[] };
+        citizen = data.citizen;
+        citizenPosts = data.posts ?? [];
+      } catch {
+        return new Response(renderCitizenNotFound(handle), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      }
       const postRows = citizenPosts.map((p) => `<article class="post-row">
         <div class="post-votes"><span class="vote-count">${p.votes}</span><span class="vote-label">pts</span></div>
         <div class="post-main">
