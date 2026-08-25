@@ -267,6 +267,203 @@ async function runAgent(env: Env): Promise<RunRecord> {
   return rec;
 }
 
+// ---------- read-only viewer ----------
+
+interface OfficialCitizen {
+  citizen_id: number;
+  handle: string;
+  model: string;
+  karma: number;
+  post_count: number;
+  comment_count: number;
+}
+
+interface PostDetail {
+  id: number;
+  title: string;
+  body: string | null;
+  votes: number;
+  comment_count: number;
+  handle: string;
+  created_at?: string;
+}
+
+interface Comment {
+  id: number;
+  body: string;
+  handle: string;
+  votes: number;
+  created_at?: string;
+}
+
+async function fetchOfficial(): Promise<OfficialCitizen[]> {
+  const res = await fetch(`${BASE}/api/official`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { citizens?: OfficialCitizen[] } | OfficialCitizen[];
+  return Array.isArray(data) ? data : (data.citizens ?? []);
+}
+
+async function fetchPost(id: string): Promise<{ post: PostDetail | null; comments: Comment[] }> {
+  const res = await fetch(`${BASE}/api/post/${id}`);
+  if (!res.ok) return { post: null, comments: [] };
+  const data = (await res.json()) as { post?: PostDetail; comments?: Comment[] };
+  return { post: data.post ?? null, comments: data.comments ?? [] };
+}
+
+function renderBrowse(posts: FrontPost[], officials: OfficialCitizen[], order: string): string {
+  const orderLinks = ["top", "new", "hot"]
+    .map((o) => `<a href="/browse?order=${o}" class="${o === order ? "active" : ""}">${o}</a>`)
+    .join("");
+
+  const postRows = posts
+    .map(
+      (p) => `<article class="post-row">
+      <div class="post-votes"><span class="vote-count">${p.votes}</span><span class="vote-label">pts</span></div>
+      <div class="post-main">
+        <a class="post-title" href="/browse/post?id=${p.id}">${escapeHtml(p.title)}</a>
+        ${p.body ? `<div class="post-body">${escapeHtml(truncate(p.body, 280))}</div>` : ""}
+        <div class="post-meta">by <a class="citizen-link" href="/browse/citizen?handle=${encodeURIComponent(p.handle)}">@${escapeHtml(p.handle)}</a> &middot; ${p.comment_count} comment${p.comment_count !== 1 ? "s" : ""}</div>
+      </div>
+    </article>`
+    )
+    .join("");
+
+  const officialRows = officials
+    .map(
+      (c) => `<div class="citizen-card">
+      <div class="citizen-handle"><a href="/browse/citizen?handle=${encodeURIComponent(c.handle)}">@${escapeHtml(c.handle)}</a></div>
+      <div class="citizen-model">${escapeHtml(c.model)}</div>
+      <div class="citizen-stats">${c.karma ?? 0} karma &middot; ${c.post_count ?? 0} posts</div>
+    </div>`
+    )
+    .join("");
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>1F916 — Browse</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${BROWSE_CSS}
+</head>
+<body>
+<div class="layout">
+  <div class="main-col">
+    <header>
+      <a class="site-name" href="/browse">1F916</a>
+      <span class="site-sub">AI citizens forum</span>
+      <a class="agent-link" href="/view">my agent logs →</a>
+    </header>
+    <div class="order-bar">${orderLinks}</div>
+    <div class="feed">${postRows || '<div class="empty">No posts found.</div>'}</div>
+  </div>
+  <aside class="sidebar">
+    <div class="sidebar-head">Official Citizens</div>
+    ${officialRows || '<div class="empty-sm">None found.</div>'}
+    <div class="sidebar-foot"><a href="https://1f916.ai" target="_blank" rel="noopener">1f916.ai ↗</a></div>
+  </aside>
+</div>
+</body></html>`;
+}
+
+function renderPostDetail(post: PostDetail, comments: Comment[]): string {
+  const commentHtml = comments
+    .map(
+      (c) => `<div class="comment">
+      <div class="comment-meta">@${escapeHtml(c.handle)}${c.created_at ? ` &middot; ${new Date(c.created_at).toUTCString()}` : ""} &middot; ${c.votes ?? 0} pts</div>
+      <div class="comment-body">${escapeHtml(c.body)}</div>
+    </div>`
+    )
+    .join("");
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHtml(post.title)} — 1F916</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+${BROWSE_CSS}
+</head>
+<body>
+<div class="layout single">
+  <div class="main-col">
+    <header>
+      <a class="site-name" href="/browse">1F916</a>
+      <span class="site-sub">AI citizens forum</span>
+      <a class="agent-link" href="/view">my agent logs →</a>
+    </header>
+    <a class="back" href="/browse">← back to feed</a>
+    <div class="post-detail">
+      <div class="post-detail-votes">${post.votes} pts</div>
+      <h1 class="post-detail-title">${escapeHtml(post.title)}</h1>
+      <div class="post-detail-meta">by <a class="citizen-link" href="/browse/citizen?handle=${encodeURIComponent(post.handle)}">@${escapeHtml(post.handle)}</a>${post.created_at ? ` &middot; ${new Date(post.created_at).toUTCString()}` : ""}</div>
+      ${post.body ? `<div class="post-detail-body">${escapeHtml(post.body)}</div>` : ""}
+    </div>
+    <div class="comments-head">${comments.length} comment${comments.length !== 1 ? "s" : ""}</div>
+    <div class="comments">${commentHtml || '<div class="empty">No comments yet.</div>'}</div>
+  </div>
+</div>
+</body></html>`;
+}
+
+function renderCitizenNotFound(handle: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>@${escapeHtml(handle)} — 1F916</title>${BROWSE_CSS}</head>
+<body><div class="layout single"><div class="main-col">
+<header><a class="site-name" href="/browse">1F916</a></header>
+<a class="back" href="/browse">← back</a>
+<div class="empty">Citizen @${escapeHtml(handle)} not found or has no public record.</div>
+</div></div></body></html>`;
+}
+
+const BROWSE_CSS = `<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { background: #0b0d12; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; margin: 0; padding: 0; }
+  .layout { max-width: 1060px; margin: 0 auto; display: grid; grid-template-columns: 1fr 240px; gap: 32px; padding: 36px 24px 80px; }
+  .layout.single { grid-template-columns: 1fr; max-width: 740px; }
+  header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
+  .site-name { font-size: 22px; font-weight: 700; color: #e6edf3; text-decoration: none; letter-spacing: -0.02em; }
+  .site-name:hover { color: #58a6ff; }
+  .site-sub { font-size: 13px; color: #6e7681; flex: 1; }
+  .agent-link { font-size: 12px; color: #58a6ff; text-decoration: none; border: 1px solid #21262d; padding: 4px 10px; border-radius: 6px; }
+  .agent-link:hover { background: #161b22; }
+  .order-bar { display: flex; gap: 6px; margin-bottom: 18px; }
+  .order-bar a { font-size: 12px; color: #8b949e; text-decoration: none; padding: 5px 12px; border-radius: 999px; background: #161b22; border: 1px solid #21262d; }
+  .order-bar a.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
+  .feed { display: flex; flex-direction: column; gap: 2px; }
+  .post-row { display: grid; grid-template-columns: 52px 1fr; gap: 12px; padding: 14px 0; border-bottom: 1px solid #1e242c; }
+  .post-row:last-child { border-bottom: none; }
+  .post-votes { text-align: center; padding-top: 2px; }
+  .vote-count { display: block; font-size: 17px; font-weight: 700; color: #e6edf3; line-height: 1; }
+  .vote-label { display: block; font-size: 10px; color: #6e7681; font-weight: 600; letter-spacing: 0.04em; }
+  .post-title { font-size: 15px; font-weight: 600; color: #e6edf3; text-decoration: none; line-height: 1.35; display: block; margin-bottom: 4px; }
+  .post-title:hover { color: #58a6ff; }
+  .post-body { font-size: 12.5px; color: #8b949e; line-height: 1.5; margin-bottom: 6px; white-space: pre-wrap; }
+  .post-meta { font-size: 11.5px; color: #6e7681; }
+  .citizen-link { color: #58a6ff; text-decoration: none; }
+  .citizen-link:hover { text-decoration: underline; }
+  .sidebar { padding-top: 68px; }
+  .sidebar-head { font-size: 11px; font-weight: 700; color: #6e7681; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+  .sidebar-foot { margin-top: 16px; font-size: 12px; }
+  .sidebar-foot a { color: #58a6ff; text-decoration: none; }
+  .citizen-card { padding: 10px 0; border-bottom: 1px solid #1e242c; }
+  .citizen-card:last-of-type { border-bottom: none; }
+  .citizen-handle a { font-size: 13px; font-weight: 600; color: #e6edf3; text-decoration: none; }
+  .citizen-handle a:hover { color: #58a6ff; }
+  .citizen-model { font-size: 11px; color: #6e7681; margin: 2px 0; font-style: italic; }
+  .citizen-stats { font-size: 11px; color: #8b949e; }
+  .back { display: inline-block; font-size: 13px; color: #58a6ff; text-decoration: none; margin-bottom: 18px; }
+  .back:hover { text-decoration: underline; }
+  .post-detail { border: 1px solid #1e242c; border-radius: 12px; padding: 20px 22px; background: #12161c; margin-bottom: 28px; }
+  .post-detail-votes { font-size: 13px; font-weight: 700; color: #3fb950; margin-bottom: 8px; }
+  .post-detail-title { font-size: 20px; font-weight: 700; margin: 0 0 8px; line-height: 1.3; letter-spacing: -0.01em; }
+  .post-detail-meta { font-size: 12.5px; color: #6e7681; margin-bottom: 14px; }
+  .post-detail-body { font-size: 14px; color: #c9d1d9; line-height: 1.65; white-space: pre-wrap; border-top: 1px solid #1e242c; padding-top: 14px; }
+  .comments-head { font-size: 13px; font-weight: 600; color: #8b949e; margin-bottom: 12px; }
+  .comments { display: flex; flex-direction: column; gap: 1px; }
+  .comment { padding: 12px 0; border-bottom: 1px solid #1e242c; }
+  .comment:last-child { border-bottom: none; }
+  .comment-meta { font-size: 11.5px; color: #6e7681; margin-bottom: 6px; }
+  .comment-body { font-size: 13.5px; color: #c9d1d9; line-height: 1.6; white-space: pre-wrap; }
+  .empty { color: #6e7681; font-size: 13px; padding: 40px 0; text-align: center; }
+  .empty-sm { color: #6e7681; font-size: 12px; padding: 8px 0; }
+  @media (max-width: 640px) { .layout { grid-template-columns: 1fr; } .sidebar { padding-top: 0; } }
+</style>`;
+
 // ---------- rendering ----------
 
 function escapeHtml(s: string): string {
@@ -467,11 +664,65 @@ export default {
       return new Response(renderPage(runs, dates, selected, env.HANDLE), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
+    if (url.pathname === "/browse") {
+      const order = url.searchParams.get("order") ?? "top";
+      const [posts, officials] = await Promise.all([
+        fetchFrontPage([]).then((p) => p),
+        fetchOfficial(),
+      ]);
+      // re-fetch with requested order if not top
+      const feedPosts = order === "top" ? posts : await (async () => {
+        const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
+        if (!res.ok) return posts;
+        const data = (await res.json()) as { posts?: FrontPost[] };
+        return data.posts ?? posts;
+      })();
+      return new Response(renderBrowse(feedPosts, officials, order), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    if (url.pathname === "/browse/post") {
+      const id = url.searchParams.get("id") ?? "";
+      if (!id) return Response.redirect(new URL("/browse", request.url).toString(), 302);
+      const { post, comments } = await fetchPost(id);
+      if (!post) return new Response("Post not found", { status: 404 });
+      return new Response(renderPostDetail(post, comments), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
+    if (url.pathname === "/browse/citizen") {
+      const handle = url.searchParams.get("handle") ?? "";
+      if (!handle) return Response.redirect(new URL("/browse", request.url).toString(), 302);
+      const res = await fetch(`${BASE}/api/record/${encodeURIComponent(handle)}`);
+      if (!res.ok) return new Response(renderCitizenNotFound(handle), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      const data = (await res.json()) as { citizen?: OfficialCitizen; posts?: PostDetail[] };
+      const citizen = data.citizen;
+      const citizenPosts = data.posts ?? [];
+      const postRows = citizenPosts.map((p) => `<article class="post-row">
+        <div class="post-votes"><span class="vote-count">${p.votes}</span><span class="vote-label">pts</span></div>
+        <div class="post-main">
+          <a class="post-title" href="/browse/post?id=${p.id}">${escapeHtml(p.title)}</a>
+          ${p.body ? `<div class="post-body">${escapeHtml(truncate(p.body, 280))}</div>` : ""}
+          <div class="post-meta">${p.comment_count} comment${p.comment_count !== 1 ? "s" : ""}</div>
+        </div>
+      </article>`).join("");
+      const html = `<!doctype html><html><head><meta charset="utf-8"><title>@${escapeHtml(handle)} — 1F916</title>${BROWSE_CSS}</head>
+<body><div class="layout single"><div class="main-col">
+<header><a class="site-name" href="/browse">1F916</a><span class="site-sub">AI citizens forum</span></header>
+<a class="back" href="/browse">← back to feed</a>
+<div class="post-detail">
+  <div class="post-detail-title">@${escapeHtml(handle)}</div>
+  ${citizen ? `<div class="post-detail-meta">${escapeHtml(citizen.model)} &middot; ${citizen.karma ?? 0} karma &middot; ${citizen.post_count ?? 0} posts &middot; ${citizen.comment_count ?? 0} comments</div>` : ""}
+</div>
+<div class="comments-head">${citizenPosts.length} post${citizenPosts.length !== 1 ? "s" : ""}</div>
+<div class="feed">${postRows || '<div class="empty">No posts yet.</div>'}</div>
+</div></div></body></html>`;
+      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+
     if (url.pathname === "/identity") {
       const identity = await env.AGENT_LOG.get("identity");
       return new Response(identity ?? "(not registered yet)", { headers: { "Content-Type": "application/json" } });
     }
 
-    return new Response("1F916 Daily Agent Worker. Endpoints: GET /view (prettified logs), GET /logs?date=YYYY-MM-DD, GET /identity, POST /run (auth required)", { status: 200 });
+    return new Response("1F916 Daily Agent Worker. Endpoints: GET /browse (read-only forum viewer), GET /view (agent logs), GET /logs?date=YYYY-MM-DD, GET /identity, POST /run (auth required)", { status: 200 });
   },
 };
