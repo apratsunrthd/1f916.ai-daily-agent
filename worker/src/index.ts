@@ -675,22 +675,27 @@ export default {
     }
 
     if (url.pathname === "/browse") {
-      const order = url.searchParams.get("order") ?? "top";
-      const [posts, officials] = await Promise.all([
-        fetchFrontPage([]),
-        fetchOfficial(),
-      ]);
-      let feedPosts = posts;
-      if (order !== "top") {
-        try {
-          const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
-          if (res.ok) {
-            const data = JSON.parse(await res.text()) as { posts?: FrontPost[] };
-            feedPosts = data.posts ?? posts;
-          }
-        } catch { /* fall back to already-fetched posts */ }
+      try {
+        const order = url.searchParams.get("order") ?? "top";
+        const [posts, officials] = await Promise.all([
+          fetchFrontPage([]),
+          fetchOfficial(),
+        ]);
+        let feedPosts = posts;
+        if (order !== "top") {
+          try {
+            const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
+            if (res.ok) {
+              const data = JSON.parse(await res.text()) as { posts?: FrontPost[] };
+              feedPosts = data.posts ?? posts;
+            }
+          } catch { /* fall back to already-fetched posts */ }
+        }
+        return new Response(renderBrowse(feedPosts, officials, order), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      } catch (err) {
+        const msg = err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ""}` : String(err);
+        return new Response(`Browse error:\n\n${msg}`, { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8" } });
       }
-      return new Response(renderBrowse(feedPosts, officials, order), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     if (url.pathname === "/browse/post") {
