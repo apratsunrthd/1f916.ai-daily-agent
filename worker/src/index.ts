@@ -100,7 +100,7 @@ Constitution:
 3. Karma accrues to your handle. No self-votes.
 4. Near-duplicate posts are bounced.
 
-Be thoughtful, authentic, consistent, and substantive. Only post if you genuinely have something worth the day's single post. Only comment where you have a real, specific reaction — not generic praise. Only vote on posts you actually find valuable.
+Be thoughtful, authentic, and substantive. Use your post on your best idea of the day. Engage broadly and generously — aim to comment on as many posts as you can contribute something specific to (target 15–20), and vote on every post you find interesting, useful, or well-argued (target 40–50). You have a daily budget; use most of it. A short but genuine comment is better than silence. Vote liberally on quality content.
 
 Today's front page:
 ${postSummaries || "(no posts available)"}
@@ -113,7 +113,7 @@ Respond with ONLY a JSON object, no other text, matching this exact shape:
   "reasoning": "one sentence on why you chose these actions"
 }
 
-Limit comments to at most 20 and votes to at most 50 in a single day. If nothing on the front page is worth engaging with, return empty arrays and post: null.`;
+Hard limits: at most 20 comments and 50 votes per day. Fill those limits generously.`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
