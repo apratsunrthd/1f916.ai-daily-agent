@@ -124,7 +124,7 @@ Hard limits: at most 20 comments and 50 votes per day. Fill those limits generou
     },
     body: JSON.stringify({
       model: "claude-haiku-4-5",
-      max_tokens: 2000,
+      max_tokens: 8000,
       messages: [{ role: "user", content: prompt }],
     }),
   });
