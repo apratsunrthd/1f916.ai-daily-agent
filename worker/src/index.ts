@@ -82,9 +82,14 @@ async function fetchFrontPage(meta: string[]): Promise<FrontPost[]> {
     meta.push(`Failed to fetch front page: ${res.status}`);
     return [];
   }
-  const data = (await res.json()) as { posts?: FrontPost[] };
-  meta.push(`Fetched ${data.posts?.length ?? 0} posts from front page`);
-  return data.posts ?? [];
+  try {
+    const data = (await res.json()) as { posts?: FrontPost[] };
+    meta.push(`Fetched ${data.posts?.length ?? 0} posts from front page`);
+    return data.posts ?? [];
+  } catch {
+    meta.push("Failed to parse front page JSON");
+    return [];
+  }
 }
 
 async function planActions(env: Env, identity: Identity, posts: FrontPost[], meta: string[]): Promise<PlannedAction> {
@@ -299,8 +304,12 @@ interface Comment {
 async function fetchOfficial(): Promise<OfficialCitizen[]> {
   const res = await fetch(`${BASE}/api/official`);
   if (!res.ok) return [];
-  const data = (await res.json()) as { citizens?: OfficialCitizen[] } | OfficialCitizen[];
-  return Array.isArray(data) ? data : (data.citizens ?? []);
+  try {
+    const data = (await res.json()) as { citizens?: OfficialCitizen[] } | OfficialCitizen[];
+    return Array.isArray(data) ? data : (data.citizens ?? []);
+  } catch {
+    return [];
+  }
 }
 
 async function fetchPost(id: string): Promise<{ post: PostDetail | null; comments: Comment[] }> {
@@ -667,19 +676,27 @@ export default {
     }
 
     if (url.pathname === "/browse") {
-      const order = url.searchParams.get("order") ?? "top";
-      const [posts, officials] = await Promise.all([
-        fetchFrontPage([]).then((p) => p),
-        fetchOfficial(),
-      ]);
-      // re-fetch with requested order if not top
-      const feedPosts = order === "top" ? posts : await (async () => {
-        const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
-        if (!res.ok) return posts;
-        const data = (await res.json()) as { posts?: FrontPost[] };
-        return data.posts ?? posts;
-      })();
-      return new Response(renderBrowse(feedPosts, officials, order), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      try {
+        const order = url.searchParams.get("order") ?? "top";
+        const [posts, officials] = await Promise.all([
+          fetchFrontPage([]).then((p) => p),
+          fetchOfficial(),
+        ]);
+        // re-fetch with requested order if not top
+        const feedPosts = order === "top" ? posts : await (async () => {
+          const res = await fetch(`${BASE}/api/front?order=${encodeURIComponent(order)}&limit=30`);
+          if (!res.ok) return posts;
+          try {
+            const data = (await res.json()) as { posts?: FrontPost[] };
+            return data.posts ?? posts;
+          } catch {
+            return posts;
+          }
+        })();
+        return new Response(renderBrowse(feedPosts, officials, order), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      } catch (err) {
+        return new Response(`Browse error: ${err instanceof Error ? err.message : String(err)}`, { status: 500 });
+      }
     }
 
     if (url.pathname === "/browse/post") {
@@ -695,7 +712,12 @@ export default {
       if (!handle) return Response.redirect(new URL("/browse", request.url).toString(), 302);
       const res = await fetch(`${BASE}/api/record/${encodeURIComponent(handle)}`);
       if (!res.ok) return new Response(renderCitizenNotFound(handle), { headers: { "Content-Type": "text/html; charset=utf-8" } });
-      const data = (await res.json()) as { citizen?: OfficialCitizen; posts?: PostDetail[] };
+      let data: { citizen?: OfficialCitizen; posts?: PostDetail[] };
+      try {
+        data = (await res.json()) as { citizen?: OfficialCitizen; posts?: PostDetail[] };
+      } catch {
+        return new Response(renderCitizenNotFound(handle), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      }
       const citizen = data.citizen;
       const citizenPosts = data.posts ?? [];
       const postRows = citizenPosts.map((p) => `<article class="post-row">
