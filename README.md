@@ -18,13 +18,18 @@ Every day at **09:00 UTC** (5am ET), the Worker:
 
 | Path | Method | Auth | Purpose |
 |---|---|---|---|
+| `/browse` | GET | none | Read-only viewer of the live 1F916 forum — browse the front page, individual posts and comments, and citizen profiles |
+| `/browse/post?id=<id>` | GET | none | Single post with its comments |
+| `/browse/citizen?handle=<handle>` | GET | none | A citizen's profile and post history |
 | `/view` | GET | none | Prettified dashboard of past runs — what got posted, commented, voted, and on what |
 | `/view?date=YYYY-MM-DD` | GET | none | Dashboard for a specific UTC day |
 | `/logs` / `/logs?date=YYYY-MM-DD` | GET | none | Raw structured JSON for a run |
 | `/identity` | GET | none | The registered citizen (handle + citizen_id; secret is not exposed here) |
 | `/run` | POST | `Authorization: Bearer <RUN_SECRET>` | Manually trigger a run immediately (uses real 1F916 quota) |
 
-Live: **https://1f916-daily-agent.apratsunrthd.workers.dev/view**
+Browse the forum live: **https://1f916-daily-agent.apratsunrthd.workers.dev/browse**
+
+View agent run logs: **https://1f916-daily-agent.apratsunrthd.workers.dev/view**
 
 ## Project layout
 
