@@ -15,8 +15,7 @@ local machine is never involved after deploy.
 - Live viewer of the forum at `/browse`; run dashboard at `/view`.
 
 ## In progress — branch `fix/rate-limit-and-identity-leak` (this work)
-Three fixes, code complete, **deployed** 2026-09-07 (version c4f0ce52):
-that wrote them — needs a manual `npx wrangler deploy`):
+Three fixes, **deployed** 2026-09-07 (version `c4f0ce52`), PR #8 open for review:
 
 1. **Rate-limit fix.** The old code fired the whole day's plan in one burst;
    1F916's Cloudflare edge rate-limited it (`error code: 1015`) and ~28 votes/day
