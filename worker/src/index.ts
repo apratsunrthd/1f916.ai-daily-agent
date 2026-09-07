@@ -196,61 +196,200 @@ async function resolveTargetTitle(targetType: "post" | "comment", targetId: numb
   }
 }
 
-async function runAgent(env: Env): Promise<RunRecord> {
+// ---------- slice-based execution ----------
+//
+// 1F916 sits behind Cloudflare and rate-limits bursts of writes (HTTP 429 /
+// "error code: 1015"). The Worker free plan also caps a single invocation at 50
+// subrequests. So we don't fire the whole day's plan at once: the first cron run
+// of the day asks Claude for a plan and stores it as an ordered queue; each
+// subsequent run drains a small slice, spacing individual calls apart. Cron is
+// set to fire every 15 min from 09:00–11:45 UTC (see wrangler.jsonc).
+
+const SLICE_SIZE = 8; // actions executed per cron run
+const MANUAL_DRAIN_CAP = 40; // max actions a single POST /run will drain
+const GAP_MS: [number, number] = [1500, 3200]; // jittered pause between write calls
+const RETRY_BACKOFF_MS: [number, number] = [5000, 9000]; // pause before the one retry
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function jitter([lo, hi]: [number, number]): number {
+  return Math.round(lo + Math.random() * (hi - lo));
+}
+
+interface QueuedAction {
+  kind: "POST" | "COMMENT" | "VOTE";
+  post?: { title: string; body: string };
+  comment?: { post_id: number; body: string };
+  vote?: { target_type: "post" | "comment"; target_id: number };
+}
+
+interface DayPlan {
+  date: string; // UTC YYYY-MM-DD
+  plannedAt: string;
+  reasoning: string | null;
+  queue: QueuedAction[];
+  cursor: number; // index of the next action to execute
+  titles: Record<string, string>; // post id -> title, captured at plan time
+}
+
+interface StatsSnapshot {
+  date: string;
+  at: string;
+  karma: number;
+  postsLanded: number;
+  commentsLanded: number;
+  votesLanded: number;
+}
+
+function planKey(date: string): string {
+  return `plan:${date}`;
+}
+
+function isRateLimited(r: ApiResult): boolean {
+  return r.status === 429 || r.status === 403 || /\b1015\b/.test(r.raw);
+}
+
+// One retry with a longer backoff when 1F916's edge rate-limits us.
+async function callApiWithRetry(path: string, secret: string, body: unknown, meta: string[]): Promise<ApiResult> {
+  const first = await callApi(path, secret, body);
+  if (first.ok || !isRateLimited(first)) return first;
+  const wait = jitter(RETRY_BACKOFF_MS);
+  meta.push(`Rate-limited on ${path}; retrying once after ${wait}ms`);
+  await sleep(wait);
+  return callApi(path, secret, body);
+}
+
+function buildQueue(plan: PlannedAction): QueuedAction[] {
+  const queue: QueuedAction[] = [];
+  if (plan.post) queue.push({ kind: "POST", post: plan.post });
+  for (const c of plan.comments) queue.push({ kind: "COMMENT", comment: c });
+  for (const v of plan.votes) queue.push({ kind: "VOTE", vote: v });
+  return queue;
+}
+
+async function executeAction(
+  env: Env,
+  identity: Identity,
+  a: QueuedAction,
+  titles: Record<string, string>,
+  meta: string[],
+): Promise<ActionRecord> {
+  if (a.kind === "POST" && a.post) {
+    const r = await callApiWithRetry("/api/post", identity.secret, { title: a.post.title, body: a.post.body }, meta);
+    return {
+      kind: "POST",
+      targetTitle: a.post.title,
+      content: a.post.body,
+      ok: r.ok,
+      message: r.data?.message,
+      detail: extractDetail(r.data),
+      error: r.ok ? undefined : r.data?.error ?? r.raw,
+    };
+  }
+  if (a.kind === "COMMENT" && a.comment) {
+    const r = await callApiWithRetry("/api/comment", identity.secret, { post_id: a.comment.post_id, body: a.comment.body }, meta);
+    return {
+      kind: "COMMENT",
+      targetType: "post",
+      targetId: a.comment.post_id,
+      targetTitle: titles[String(a.comment.post_id)],
+      content: a.comment.body,
+      ok: r.ok,
+      message: r.data?.message,
+      detail: extractDetail(r.data),
+      error: r.ok ? undefined : r.data?.error ?? r.raw,
+    };
+  }
+  if (a.kind === "VOTE" && a.vote) {
+    const title =
+      a.vote.target_type === "post"
+        ? titles[String(a.vote.target_id)]
+        : await resolveTargetTitle("comment", a.vote.target_id, new Map());
+    const r = await callApiWithRetry("/api/vote", identity.secret, { target_type: a.vote.target_type, target_id: a.vote.target_id }, meta);
+    return {
+      kind: "VOTE",
+      targetType: a.vote.target_type,
+      targetId: a.vote.target_id,
+      targetTitle: title,
+      ok: r.ok,
+      message: r.data?.message,
+      detail: extractDetail(r.data),
+      error: r.ok ? undefined : r.data?.error ?? r.raw,
+    };
+  }
+  return { kind: a.kind, ok: false, error: "malformed queued action" };
+}
+
+async function snapshotStats(env: Env, identity: Identity, date: string, meta: string[]): Promise<void> {
+  try {
+    const res = await fetch(`${BASE}/api/me`, { headers: { Authorization: `Bearer ${identity.secret}` } });
+    if (!res.ok) {
+      meta.push(`Stats snapshot skipped: /api/me returned ${res.status}`);
+      return;
+    }
+    const d = (await res.json()) as { karma?: number; today?: { posts_remaining?: number; comments_remaining?: number; votes_remaining?: number } };
+    const snap: StatsSnapshot = {
+      date,
+      at: new Date().toISOString(),
+      karma: d.karma ?? 0,
+      postsLanded: 1 - (d.today?.posts_remaining ?? 1),
+      commentsLanded: 20 - (d.today?.comments_remaining ?? 20),
+      votesLanded: 50 - (d.today?.votes_remaining ?? 50),
+    };
+    await env.AGENT_LOG.put(`stats:${date}`, JSON.stringify(snap));
+    meta.push(`Stats snapshot: karma ${snap.karma}, landed ${snap.postsLanded}p/${snap.commentsLanded}c/${snap.votesLanded}v`);
+  } catch (err) {
+    meta.push(`Stats snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+// Execute one slice of the day's queue. On the first run of the day, plans first.
+async function runSlice(env: Env, opts: { drainAll?: boolean } = {}): Promise<RunRecord> {
   const startedAt = new Date().toISOString();
+  const date = startedAt.slice(0, 10);
   const rec: RunRecord = { startedAt, finishedAt: "", handle: env.HANDLE, reasoning: null, meta: [], errors: [], actions: [] };
 
   try {
     const identity = await getOrCreateIdentity(env, rec.meta);
-    const posts = await fetchFrontPage(rec.meta);
-    const postsById = new Map(posts.map((p) => [p.id, p]));
-    const plan = await planActions(env, identity, posts, rec.meta);
-    rec.reasoning = plan.reasoning ?? null;
 
-    if (plan.post) {
-      const r = await callApi("/api/post", identity.secret, { title: plan.post.title, body: plan.post.body });
-      rec.actions.push({
-        kind: "POST",
-        targetTitle: plan.post.title,
-        content: plan.post.body,
-        ok: r.ok,
-        message: r.data?.message,
-        detail: extractDetail(r.data),
-        error: r.ok ? undefined : r.data?.error ?? r.raw,
-      });
+    let plan = (await env.AGENT_LOG.get(planKey(date), "json")) as DayPlan | null;
+
+    if (!plan) {
+      const posts = await fetchFrontPage(rec.meta);
+      const planned = await planActions(env, identity, posts, rec.meta);
+      plan = {
+        date,
+        plannedAt: new Date().toISOString(),
+        reasoning: planned.reasoning ?? null,
+        queue: buildQueue(planned),
+        cursor: 0,
+        titles: Object.fromEntries(posts.map((p) => [String(p.id), p.title])),
+      };
+      await env.AGENT_LOG.put(planKey(date), JSON.stringify(plan));
+      rec.meta.push(`Built queue of ${plan.queue.length} action(s); draining ${SLICE_SIZE} per run`);
+    }
+
+    rec.reasoning = plan.reasoning;
+
+    const remaining = plan.queue.length - plan.cursor;
+    if (remaining <= 0) {
+      rec.meta.push("Nothing left in today's queue.");
     } else {
-      rec.meta.push("Decided not to post today.");
+      const limit = Math.min(opts.drainAll ? MANUAL_DRAIN_CAP : SLICE_SIZE, remaining);
+      rec.meta.push(`Executing ${limit} of ${remaining} remaining action(s)`);
+      for (let i = 0; i < limit; i++) {
+        if (i > 0) await sleep(jitter(GAP_MS));
+        const action = plan.queue[plan.cursor + i];
+        rec.actions.push(await executeAction(env, identity, action, plan.titles, rec.meta));
+      }
+      plan.cursor += limit;
+      await env.AGENT_LOG.put(planKey(date), JSON.stringify(plan));
     }
 
-    for (const c of plan.comments) {
-      const title = postsById.get(c.post_id)?.title;
-      const r = await callApi("/api/comment", identity.secret, { post_id: c.post_id, body: c.body });
-      rec.actions.push({
-        kind: "COMMENT",
-        targetType: "post",
-        targetId: c.post_id,
-        targetTitle: title,
-        content: c.body,
-        ok: r.ok,
-        message: r.data?.message,
-        detail: extractDetail(r.data),
-        error: r.ok ? undefined : r.data?.error ?? r.raw,
-      });
-    }
-
-    for (const v of plan.votes) {
-      const title = await resolveTargetTitle(v.target_type, v.target_id, postsById);
-      const r = await callApi("/api/vote", identity.secret, { target_type: v.target_type, target_id: v.target_id });
-      rec.actions.push({
-        kind: "VOTE",
-        targetType: v.target_type,
-        targetId: v.target_id,
-        targetTitle: title,
-        ok: r.ok,
-        message: r.data?.message,
-        detail: extractDetail(r.data),
-        error: r.ok ? undefined : r.data?.error ?? r.raw,
-      });
+    if (plan.cursor >= plan.queue.length) {
+      await snapshotStats(env, identity, date, rec.meta);
     }
   } catch (err) {
     rec.errors.push(err instanceof Error ? err.message : String(err));
@@ -258,7 +397,7 @@ async function runAgent(env: Env): Promise<RunRecord> {
 
   rec.finishedAt = new Date().toISOString();
 
-  const dateKey = `runlog:${startedAt.slice(0, 10)}`;
+  const dateKey = `runlog:${date}`;
   const existing = (await env.AGENT_LOG.get(dateKey, "json")) as RunRecord[] | null;
   const updated = existing ? [...existing, rec] : [rec];
   await env.AGENT_LOG.put(dateKey, JSON.stringify(updated));
@@ -531,7 +670,40 @@ function runCard(run: RunRecord): string {
   </section>`;
 }
 
-function renderPage(runs: RunRecord[], dates: string[], selected: string, handle: string): string {
+function sparkline(values: number[]): string {
+  if (values.length < 2) return "";
+  const w = 180;
+  const h = 32;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const pts = values
+    .map((v, i) => `${((i / (values.length - 1)) * w).toFixed(1)},${(h - ((v - min) / span) * h).toFixed(1)}`)
+    .join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="#3fb950" stroke-width="1.5" /></svg>`;
+}
+
+function statsStrip(snaps: StatsSnapshot[], selected: string): string {
+  if (!snaps.length) return "";
+  const latest = snaps[snaps.length - 1];
+  const onDate = snaps.find((s) => s.date === selected);
+  const shown = onDate ?? latest;
+  const idx = snaps.indexOf(shown);
+  const prev = idx > 0 ? snaps[idx - 1] : null;
+  const delta = prev ? shown.karma - prev.karma : null;
+  const deltaStr = delta === null ? "" : delta === 0 ? "±0" : delta > 0 ? `+${delta}` : `${delta}`;
+  const landed = `${shown.postsLanded} post${shown.postsLanded !== 1 ? "s" : ""} &middot; ${shown.commentsLanded} comments &middot; ${shown.votesLanded} votes`;
+  return `<div class="stats-strip">
+    <div class="stat-karma">
+      <div class="stat-num">${shown.karma}<span class="stat-label">karma</span></div>
+      ${deltaStr ? `<div class="stat-delta ${delta! >= 0 ? "up" : "down"}">${deltaStr}${onDate ? "" : " latest"}</div>` : ""}
+    </div>
+    ${sparkline(snaps.map((s) => s.karma))}
+    <div class="stat-landed"><div class="stat-landed-label">landed ${onDate ? "on " + selected : "last complete day"}</div>${landed}</div>
+  </div>`;
+}
+
+function renderPage(runs: RunRecord[], dates: string[], selected: string, handle: string, snaps: StatsSnapshot[] = []): string {
   const nav = dates.map((d) => `<a href="/view?date=${d}" class="${d === selected ? "active" : ""}">${d}</a>`).join("");
   const body = runs.length ? runs.map(runCard).reverse().join("") : `<div class="empty">No runs recorded for this day yet.</div>`;
 
@@ -617,6 +789,21 @@ function renderPage(runs: RunRecord[], dates: string[], selected: string, handle
     color: #8b949e;
   }
   .empty { color: #6e7681; font-size: 13px; padding: 40px 0; text-align: center; }
+  .stats-strip {
+    display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+    background: linear-gradient(180deg, #12161c, #0f1319);
+    border: 1px solid #1e242c; border-radius: 14px;
+    padding: 16px 20px; margin-bottom: 22px;
+  }
+  .stat-karma { display: flex; align-items: baseline; gap: 8px; }
+  .stat-num { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 12px; font-weight: 500; color: #6e7681; margin-left: 6px; }
+  .stat-delta { font-size: 12px; font-weight: 600; }
+  .stat-delta.up { color: #3fb950; }
+  .stat-delta.down { color: #f85149; }
+  .spark { width: 180px; height: 32px; flex-shrink: 0; }
+  .stat-landed { font-size: 12.5px; color: #8b949e; margin-left: auto; text-align: right; }
+  .stat-landed-label { font-size: 11px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 2px; }
 </style></head>
 <body>
 <div class="wrap">
@@ -624,6 +811,7 @@ function renderPage(runs: RunRecord[], dates: string[], selected: string, handle
     <h1>1F916 Daily Agent <span class="handle">@${escapeHtml(handle)}</span></h1>
     <a class="badge-link" href="https://1f916.ai/api/record/${escapeHtml(handle)}" target="_blank" rel="noopener">public record &rarr;</a>
   </header>
+  ${statsStrip(snaps, selected)}
   <nav>${nav}</nav>
   ${body}
 </div>
@@ -632,7 +820,7 @@ function renderPage(runs: RunRecord[], dates: string[], selected: string, handle
 
 export default {
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runAgent(env));
+    ctx.waitUntil(runSlice(env));
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -643,8 +831,19 @@ export default {
       if (auth !== `Bearer ${env.RUN_SECRET}`) {
         return new Response("Unauthorized", { status: 401 });
       }
-      const rec = await runAgent(env);
+      // Manual trigger drains as much of today's queue as one invocation safely
+      // can (still spaced + retried). Repeat the call to drain the rest.
+      const rec = await runSlice(env, { drainAll: true });
       return new Response(JSON.stringify(rec, null, 2), { headers: { "Content-Type": "application/json" } });
+    }
+
+    if (url.pathname === "/stats") {
+      const listed = await env.AGENT_LOG.list({ prefix: "stats:" });
+      const snaps = (
+        await Promise.all(listed.keys.map((k) => env.AGENT_LOG.get(k.name, "json") as Promise<StatsSnapshot | null>))
+      ).filter((s): s is StatsSnapshot => !!s);
+      snaps.sort((a, b) => a.date.localeCompare(b.date));
+      return new Response(JSON.stringify(snaps, null, 2), { headers: { "Content-Type": "application/json" } });
     }
 
     if (url.pathname === "/logs") {
@@ -663,7 +862,12 @@ export default {
         .reverse();
       const selected = url.searchParams.get("date") ?? dates[0] ?? "";
       const runs = selected ? ((await env.AGENT_LOG.get(`runlog:${selected}`, "json")) as RunRecord[] | null) ?? [] : [];
-      return new Response(renderPage(runs, dates, selected, env.HANDLE), { headers: { "Content-Type": "text/html; charset=utf-8" } });
+      const statsListed = await env.AGENT_LOG.list({ prefix: "stats:" });
+      const snaps = (
+        await Promise.all(statsListed.keys.map((k) => env.AGENT_LOG.get(k.name, "json") as Promise<StatsSnapshot | null>))
+      ).filter((s): s is StatsSnapshot => !!s);
+      snaps.sort((a, b) => a.date.localeCompare(b.date));
+      return new Response(renderPage(runs, dates, selected, env.HANDLE, snaps), { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
     if (url.pathname === "/browse") {
@@ -721,10 +925,12 @@ export default {
     }
 
     if (url.pathname === "/identity") {
-      const identity = await env.AGENT_LOG.get("identity");
-      return new Response(identity ?? "(not registered yet)", { headers: { "Content-Type": "application/json" } });
+      const stored = (await env.AGENT_LOG.get("identity", "json")) as Identity | null;
+      // Never expose the bearer secret — it is full write access to the citizen.
+      const safe = stored ? { citizen_id: stored.citizen_id, handle: stored.handle } : null;
+      return new Response(JSON.stringify(safe ?? "(not registered yet)"), { headers: { "Content-Type": "application/json" } });
     }
 
-    return new Response("1F916 Daily Agent Worker. Endpoints: GET /browse (read-only forum viewer), GET /view (agent logs), GET /logs?date=YYYY-MM-DD, GET /identity, POST /run (auth required)", { status: 200 });
+    return new Response("1F916 Daily Agent Worker. Endpoints: GET /browse (read-only forum viewer), GET /view (agent logs), GET /stats (karma over time), GET /logs?date=YYYY-MM-DD, GET /identity, POST /run (auth required)", { status: 200 });
   },
 };

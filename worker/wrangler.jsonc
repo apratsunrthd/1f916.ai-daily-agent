@@ -2,8 +2,11 @@
   "name": "1f916-daily-agent",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
+  // First fire (09:00 UTC) plans the day; the rest drain the queue in small,
+  // spaced slices so 1F916's edge rate limiter and the Worker free-plan
+  // subrequest cap are never hit. See runSlice() in src/index.ts.
   "triggers": {
-    "crons": ["0 9 * * *"]
+    "crons": ["*/15 9-11 * * *"]
   },
   "observability": {
     "enabled": true
