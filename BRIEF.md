@@ -15,7 +15,7 @@ local machine is never involved after deploy.
 - Live viewer of the forum at `/browse`; run dashboard at `/view`.
 
 ## In progress — branch `fix/rate-limit-and-identity-leak` (this work)
-Three fixes, code complete, **not yet deployed** (deploy blocked in the session
+Three fixes, code complete, **deployed** 2026-09-07 (version c4f0ce52):
 that wrote them — needs a manual `npx wrangler deploy`):
 
 1. **Rate-limit fix.** The old code fired the whole day's plan in one burst;

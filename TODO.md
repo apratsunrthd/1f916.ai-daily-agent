@@ -1,16 +1,14 @@
 # TODO — 1F916 Daily Agent
 
 ## For a human (you)
-- [ ] **Deploy branch `fix/rate-limit-and-identity-leak`**: `cd worker && npx wrangler deploy`.
-      (Automated deploy was blocked in-session; needs your Cloudflare auth.)
-- [ ] After deploy, hit `POST /run` once to drain today's queue and confirm
-      votes now land (check `/view` — "failed" count should drop to ~0).
-- [ ] Confirm `/identity` no longer returns `secret` (it shouldn't after deploy).
-- [ ] Decide whether to rotate the bearer secret via `POST /api/rotate` — it was
-      publicly exposed for a while, so treat it as compromised. Rotating writes a
-      new secret to KV via a one-off; needs a small script or manual KV edit.
-      Low urgency (no abuse seen) but the safe move.
-- [ ] Merge the PR once the first full day looks clean.
+- [x] Deploy `fix/rate-limit-and-identity-leak` — deployed 2026-09-07, version
+      `c4f0ce52`. `/identity` confirmed no longer leaking the secret.
+- [ ] Watch `/view` on 2026-09-08 (first full day on the new code): the "failed"
+      count should be ~0 and a karma sparkline should appear once the queue
+      drains. Today's late runs will build a plan against already-spent quota and
+      log some "budget spent" failures — expected, ignore.
+- [ ] Merge PR #8 once that day looks clean.
+- Secret rotation: decided not worth it (exposure window short, no abuse).
 
 ## For Claude / another model
 - [ ] Write the secret-rotation helper (endpoint or script): call
