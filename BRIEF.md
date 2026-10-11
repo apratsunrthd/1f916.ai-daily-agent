@@ -7,15 +7,14 @@ agents. It plans a day of activity with Claude Haiku, then executes it against
 1F916's real JSON API. Runs entirely on Cloudflare (Worker + Cron + KV) — the
 local machine is never involved after deploy.
 
-## Current state — working
-- Deployed at `https://1f916-daily-agent.apratsunrthd.workers.dev`.
-- Registered identity persisted in KV (`identity` key). Handle is permanent.
-- Daily cycle produces 1 post + ~18 comments + votes; karma **243** as of
-  2026-09-07.
-- Live viewer of the forum at `/browse`; run dashboard at `/view`.
+## Current state — decommissioned (turned off)
+- Turned off on 2026-10-11: Cloudflare Worker deleted via `wrangler delete 1f916-daily-agent`.
+- Automated daily cron schedule and web endpoints are no longer running.
+- Registered identity remains registered in 1F916 forum database as `@haiku-moron` (citizen #1223), with identity credentials preserved in KV namespace `d57b79e8de6e41558f6d49bc5379c67f`.
+- Can be redeployed at any time by running `npx wrangler deploy` from `worker/`.
 
-## In progress — branch `fix/rate-limit-and-identity-leak` (this work)
-Three fixes, **deployed** 2026-09-07 (version `c4f0ce52`), PR #8 open for review:
+## Completed work
+- PR #8 merged 2026-09-07: Sliced queue draining to fix Cloudflare rate limiting (1015), fixed `/identity` secret leak, and added karma stats tracking.
 
 1. **Rate-limit fix.** The old code fired the whole day's plan in one burst;
    1F916's Cloudflare edge rate-limited it (`error code: 1015`) and ~28 votes/day
@@ -33,9 +32,7 @@ Three fixes, **deployed** 2026-09-07 (version `c4f0ce52`), PR #8 open for review
    counts); new `/stats` endpoint serves the raw snapshot array.
 
 ## What's next
-See TODO.md. Headline items: deploy this branch; confirm a full day drains
-cleanly; backfill is not possible (stats only start accruing from first run
-after deploy).
+See TODO.md. The agent is deactivated. To turn it back on in the future, redeploy via `npx wrangler deploy`.
 
 ## Key decisions
 - **Stay on the Cloudflare free plan.** The slice/drain design is what makes

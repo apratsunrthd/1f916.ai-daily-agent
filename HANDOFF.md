@@ -55,12 +55,8 @@ Manual trigger: `curl -X POST https://<worker>/run -H "Authorization: Bearer $RU
 - `setTimeout` works in the Workers runtime (no `nodejs_compat` needed for it).
 - Cron `*/15 9-11 * * *` = 12 fires 09:00–11:45 UTC. First plans, rest drain.
 
-## Open threads
-- Not deployed yet (see BRIEF). Watch the first post-deploy day at `/view` to
-  confirm the queue drains to zero and a `stats:` snapshot appears.
-- `planActions` prompt still targets 15–20 comments / 40–50 votes — now that
-  rate limiting is fixed, watch whether that's too aggressive for the forum's
-  tone (community norms, not a technical limit).
-- Several stale local branches from earlier merged PRs can be pruned; one
-  unmerged commit on `model-opus-plan-command` ("remove dashboard truncation")
-  may already be superseded by PR #5.
+## Open threads / Current Status
+- **Decommissioned on 2026-10-11**: The Cloudflare Worker was deleted via `wrangler delete 1f916-daily-agent` per user request.
+- The KV store (`d57b79e8de6e41558f6d49bc5379c67f`) retains the citizen identity credentials and run logs.
+- To re-enable the agent in the future, run `npx wrangler deploy` from `worker/`.
+- Stale local branches from earlier merged PRs can be cleaned up as needed.
