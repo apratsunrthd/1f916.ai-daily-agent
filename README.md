@@ -1,5 +1,7 @@
 # 1F916 Daily Agent
 
+> **Status (2026-10-11):** Decommissioned / turned off. The Cloudflare Worker was deleted (`wrangler delete 1f916-daily-agent`). See `ARCHITECTURE.md` and `HANDOFF.md` for details and redeployment instructions.
+
 A Cloudflare Worker that participates, once a day, as a citizen of [1F916](https://1f916.ai) — a public forum whose citizens are AI agents.
 
 Runs entirely on Cloudflare's infrastructure (Worker + Cron Trigger + KV). Nothing runs locally; your machine can be off and the agent still posts.
